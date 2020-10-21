@@ -1,0 +1,210 @@
+---
+title: "OPIM326 PROJECT G1 Group 5"
+fontsize: 11pt
+geometry: margin=1in
+output:
+  word_document: default
+
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# OPIM326 Service and Operations Analytics  
+  
+# Credit Card Fraud  
+  
+# Group Project Compiled Report  
+
+Created for: Professor Zheng Zhichao, Daniel  
+Created by: G1 Group 5  
+Goh Chen Chung  
+Howe Jerry  
+Kee Bei Bei  
+Tizane Ong  
+
+  
+**Agenda**  
+1. Background of Data  
+2. Problem Statement  
+3. Data Visualisation  
+4. Pre-processing of data  
+5. Selection of Model  
+6. Parameters tuning and predictions  
+7. Types of analytics covered  
+8. Discussion of findings from the analysis above  
+9. Limitations and future studies  
+
+## 1. Data
+The data downloaded from Kaggle contains almost 285,000 transactions made in a 48-hour period by European credit cardholders in September 2013. Approximately 0.17% of the transactions (492) were identified as fraud cases. This means the dataset is highly influenced by non-fraudulent transactions.  
+  
+This dataset was originally collected for a collaborative research between Worldline and the Machine Learn Group of University Libre de Bruxelles on big data mining as well as fraud detection.  
+  
+Most of the variables were recorded as features V1 to V28, which are independent variables intentionally left ambiguous to maintain confidentiality.  
+  
+The only named variables are:  
+i. Time - Independent variable which indicates the seconds elapsed between the first transaction (placed at 0 seconds) and each subsequent transaction.  
+ii. Amount - Independent variable indicating the transaction amount.  
+iii. Class - Response (Dependent) variable that is binomial in nature, with 1 indicating Fraud and 0 indicating otherwise.  
+ 
+## 2. Problem statement
+The Nilson Report found that worldwide, credit card frauds amounted to more than $24 billion USD in 2018 alone. LexisNexis also reports the true cost of fraud in 2018 to be $2.92 for every $1 of fraud. This means that in successfully identifying fraudulent cases, and thereby deterring future fraud cases, there is potential to have saved more than $70 billion USD due to fraud in 2018.  
+  
+As majority (>99%) of the dataset belong to the negative class, and we need to identify the true positive cases (fraud), a highly accurate model will not be able to fulfil this requirement. Therefore, we aim to generate a prediction model to identify fraudulent cases while balancing sensitivity and specificity.  
+
+
+
+
+```{r pressure, echo=FALSE,  results="hide", include=FALSE}
+library(corrplot)
+library(ROCR)
+library(rpart)
+library(rpart.plot)
+library(readr)
+library(dplyr)
+library(randomForest)
+library(ggplot2)
+library(Hmisc)
+library(party)
+library(caret)
+library(e1071)
+library(caTools)
+
+train <- read_csv("creditcard.csv")
+```
+
+
+## 3. Visualisation of dataset
+Through plotting the correlation plot, we see that there are quite a lot of uncorrelated features. We removed the uncorrelated variables and the model performed worse, so we kept it in the end.
+```{r}
+M<-cor(train) #Correlation analysis
+corrplot(M, method="circle")
+```
+
+This is a chart showing the class imbalance in our dataset. There are 99.7% of negative test cases and only 0.3% positive
+test cases.
+```{r}
+hist(train$Class)
+```
+
+Next, we look for outliers for every variable. Once again, we have tested the model with and without outliers and found no
+significance difference in model prediction power. Hence, we decided to keep it to prevent possible information loss.
+```{r}
+creditData_boxplot <- names(train) %in% c("Class", "Time", "Amount")
+creditData_boxplot_input <- train[!creditData_boxplot]
+
+
+OutVals = boxplot(creditData_boxplot_input)$out #Outlier Detection (but not removed)
+which(creditData_boxplot_input %in% OutVals)
+```
+
+## 4. Data pre-processing
+We then split our train set into further train and test set, this is required to tune hyperparameters for our model if needed, as we cannot use the test set generated above to do that due to problems of overfitting.
+```{r}
+split = sample.split(train$Class, SplitRatio = 0.75) #Split train data into further train + test dataset for cv.
+train = subset(train, split == TRUE)
+test = subset(train, split == FALSE)
+```
+After that, we have to oversample our dataset due to the class imbalance discussed above. We duplicated 70000 rows of positive case data, which is roughly 1/3 of the whole train dataset. A better way to do it is to use SMOTE, which stands for synthetic minority over-sampling technique. This method creates points that are similar, but not identical, to the positive test cases, which will make our model recognise positive cases better. However, since that is out of scope, and might be computationally expensive, we stuck to duplication of points.
+
+```{r}
+train_1 <- train[train$Class == 1,]
+train_0 <- train[train$Class == 0,]
+train_yes <- train_1[sample(nrow(train_1),70000, replace = TRUE),]
+train_sampled <- rbind(train, train_yes)
+
+set.seed(2019)
+split = sample.split(train_sampled$Class, SplitRatio = 0.75) #Split train data into further train + test dataset
+train_df = subset(train_sampled, split == TRUE)
+test_df = subset(train_sampled, split == FALSE)
+```
+
+## 5. Selection of model
+Now, we used the prepare dataset as input for the 3 classification models taught in class - Logistic Regression, Decision trees and Random Forest. The metric we will be using to determine our best model is the AUC score, since specificity and sensitivity is very important in this problem set as discussed above. It turns out that Logistic Regression produced the best AUC score of 0.986, while Decision tree only has a score of 0.926. However, we tried to run the data set on a Random Forest model, but the runtime is simply too long due to the large dataset (280000 rows * 30 columns). What we have decided to do is to do undersampling of the negative cases (not included in the code), but the AUC score it produced is still lower than the score of Logistic Regression. With that, we have decided to use Logistic Regression as our model.
+```{r}
+BOlog = glm(Class ~ . - Time, data = train_df, family = "binomial")
+predictTree = predict(BOlog, newdata = test_df, type = "response")
+ROCRpredTest = prediction(predictTree, test_df$Class)
+ROCRaucTest = performance(ROCRpredTest, "auc")
+scoreLR = ROCRaucTest@y.values[[1]]
+cat('Logistic Regression score:', scoreLR)
+
+# rand_forest = randomForest(Class ~ . - Time, data = train_df, ntree = 300, mtry = 7,
+#                              nodesize = 1)
+# predictRF = predict(rand_forest, newdata = test_df, type = "prob")
+# ROCRpredTest = prediction(predictRF[,2], test_df$Class)
+# ROCRaucTest = performance(ROCRpredTest, "auc")
+# scoreRF = ROCRaucTest@y.values[[1]]
+# cat('Random Forest score:', scoreRF)
+
+
+decTree = rpart(Class ~ . - Time, data = train_df, method = "class")
+predictTree = predict(decTree, newdata = test_df, type = "prob")
+ROCRpredTest = prediction(predictTree[,2], test_df$Class)
+ROCRaucTest = performance(ROCRpredTest, "auc")
+scoreTree = ROCRaucTest@y.values[[1]]
+cat('Decision Tree score:', scoreTree)
+```
+## 6. Parameters tuning and predictions
+The Logistic Regression model has very few parameters that we can tune. We tried to tune several of them but the results were largely the same, and so we stuck to the default model instead. 
+
+We decided to pick different thresholds and see how our model would perform in each case. The tables listed are of threshold 0.1, 0.2, 0.3, 0.4, 0.5 respectively. As expected, the number of false negatives will increase as the threshold increase, whilst the number of false positive will drop. This is very important because the threshold to be selected will be different, depending on the costs for FP and FN. This is when prescriptive analytics come in, and will be discussed below.
+
+```{r}
+test$prob <- predict(BOlog, newdata = test, type = "response")
+
+conf01 = table(test$Class, test$prob > 0.1)
+conf01
+
+conf02 = table(test$Class, test$prob > 0.2)
+conf02
+
+conf03 = table(test$Class, test$prob > 0.3)
+conf03
+
+conf04 = table(test$Class, test$prob > 0.4)
+conf04
+
+conf05 = table(test$Class, test$prob > 0.5)
+conf05
+
+```
+
+## 7. Types of Analytics covered
+**Descriptive analytics**
+This kind of analytics focuses mainly on visualisation, and the insights that can be derived from that. As seen in the code above, there were many visualisations that we created. We plotted a bar graph of the positive and negative cases and saw that there is a huge class imbalance, which tells us that most transactions are not fraudulent. Our correlation analysis can be useful in telling us which variables are correlated with a fraudulent transaction. For example, V18 is positively correlated with the predicted variable and so for every transaction that has high V18, the chances of it being fraudulent is higher.
+
+**Predictive Analytics**
+Predictive Analytics, as its name suggests, is mainly used for predicting the outcome given many features. In our case, we used a Logistic Regression model to output our predictions. Our insights and code has already been shown above and we will not repeat it here again.
+
+**Prescriptive Analytics**
+This kind of analytics is mainly aimed at optimisation. In our problem set, this is one of the more important kind of analytics, at least in our case, and it goes hand in hand with predictive analytics. As discussed above, different threshold should be used for companies with different FP and FN costs. A company with higher than average FN cost will want a model that has comparatively lower rate of FN (higher sensitivity, lower threshold). Conversely, companies with higher than average FN cost would choose a model with lower rate of FP (higher specificity, higher threshold). 
+
+Example: Let the cost of FN and FP be 10 and 10000 respectively for Company A. Let the cost of FN and FP be 50 and 10000 respectively for Company B. Total cost for A under t = 0.1 is 43140 + 30000 = 73140. That is the best threshold for A as the others generate higher cost. You can compare it to lets say t = 0.2, cost for A is 17400 + 90000 = 107400, which is more than the cost under t = 0.1. Whereas for Company B, cost for B when t = 0.1 is 4314 x 50 + 30000 = 245700. This is not the best threshold for B. Best threshold for B is t = 0.4, cost for B is 529 x 50 + 100000 =  126450. From this, we can see that if a company does not take their FN and FP cost into account and randomly choose the threshold, they lose out on the potential to further cut down on their cost.
+
+Thus, usage of prescriptive analytics is very important - to choose the best threshold to be used for predictive analytics.
+
+**Diagnostic Analytics**
+Diagnostic analytics involves finding the cause to the problem (why did it happen?). It is linked very closely to descriptive analytics, which tells us how did it happen. For example, from the correlation analysis, we found out how does fraudulent transaction happen - due to highly correlated features such as V18. Diagnostic analytics aims to figure out why is V18 correlated, but since the features are anonymous, we are not able to do that. Instead, we will assume that we are given the names of features - suppose V18 is a feature that measures the income level of the card holder. We can then find out the reason why it is correlated - credit card thefts might happen more to people that earn more.
+
+## 8. Discussion of findings from the analysis above
+Due to an imbalance in data, an algorithm that predicts all transactions as non frauds will also achieve an accuracy of 99.828%. Thus, accuracy is not a good measure of efficiency in our case. The purpose of our model is to identify frauds, which only comprises of 0.2% of the whole data. Hence, a model with 99.8% accuracy by predicting all negative but cannot detect frauds is useless. The best standard of correctness for this classification problem will be ROC or F1-Score.
+
+The 'Time' feature does not indicate the actual time of the transaction and is more of a list of the data in chronological order. Thus, the 'Time' attribute has little or no significance in classifying fraud transactions. Therefore, we eliminate this column from our analysis.
+
+We can understand more about the value of credit card fraud detection models when we analyse various scenarios for financial institutions. If their customers that were making regular purchases got their card blocked due to our model classifying that transaction as fraudulent, this will be a huge disadvantage for financial institutions. There will be increases in number of customer complaints, as well as higher customer dissatisfaction. All these will incur cost in more than one way such as worsening of brand due to lesser reliability.
+
+So how do we know if we should sacrifice our precision for more recall, i.e. catching fraud?
+
+If the cost of missing a fraud highly outweighs the cost of canceling a bunch of legit customer transactions, i.e. false positives, then we can choose a threshold that gives us a higher recall rate.
+Alternatively, if catching 80% of fraud is good enough for their businesses, they can also minimize the "user friction" or credit card disruptions by keeping our precision high. Thus, balancing of specificity and sensitivity is important and the type of model will be derived based on the cost of false negative or false positives for respective companies.
+
+## 9. Limitations and future studies
+One limitation is that it can be hard to estimate costs which are the false negative costs and the false positives costs. The costs that are easy to determine are the costs from losing out on transaction fees from a false positive, and the cost of bearing the responsility of the fraud from a false negative. There are still hidden costs such as the cost of losing the cardholder as a customer - it is hard to determine how much does the company actually lose out when this happens.
+
+Also, there are times where the prediction model that the company used might not produce the most optimised results. As seen in our case above, the Random Forest model cannot be run on such a huge dataset - it will take very long. If it was able to run in computational time, the results and model generated might be better than the ones we got from the Logistic Regression model. 
+
+Moving forward, the company can try to engineer more features based on the dataset to feed into the model, which can improve predictive power of the model. They can also aim to calculate the cost of false positive and false negative more accurately in order for prescriptive analytics to be more useful. Also, they can look into more prediction models such as gradient boosting models and neural networks.
+
+
